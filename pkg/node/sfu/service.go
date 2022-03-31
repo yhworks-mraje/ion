@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/ion-log"
 	"github.com/bep/debounce"
+	log "github.com/pion/ion-log"
 	ion_sfu_log "github.com/pion/ion-sfu/pkg/logger"
 	"github.com/pion/ion-sfu/pkg/middlewares/datachannel"
 	"github.com/pion/ion-sfu/pkg/sfu"
@@ -33,6 +33,11 @@ type SFUService struct {
 	sfu   *ion_sfu.SFU
 	mutex sync.RWMutex
 	sigs  map[string]rtc.RTC_SignalServer
+}
+
+type ResolveOldTrickle struct {
+	target    int
+	candidate webrtc.ICECandidateInit
 }
 
 func NewSFUService(conf ion_sfu.Config) *SFUService {
@@ -80,6 +85,7 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 	//val := sigStream.Context().Value("claims")
 	//log.Infof("context val %v", val)
 	peer := ion_sfu.NewPeer(s.sfu)
+	recvCandidates := []ResolveOldTrickle{}
 	var tracksMutex sync.RWMutex
 	var tracksInfo []*rtc.TrackInfo
 
@@ -254,6 +260,15 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 				log.Errorf("signal send error: %v", err)
 			}
 
+			// trickle the old received candidates
+			for _, oldTrickle := range recvCandidates {
+				log.Debugf("[C=>S] trickle: target %v, old candidate %v", oldTrickle.target, oldTrickle.candidate.Candidate)
+				err = peer.Trickle(oldTrickle.candidate, oldTrickle.target)
+				if err != nil {
+					log.Warnf("peer trickle error: %v", err)
+				}
+			}
+
 			publisher := peer.Publisher()
 
 			if publisher != nil {
@@ -420,19 +435,12 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 			if err != nil {
 				switch err {
 				case ion_sfu.ErrNoTransportEstablished:
-					log.Errorf("peer hasn't joined, error -> %v", err)
-					err = sig.Send(&rtc.Reply{
-						Payload: &rtc.Reply_Error{
-							Error: &rtc.Error{
-								Code:   int32(error_code.InternalError),
-								Reason: fmt.Sprintf("trickle error:  %v", err),
-							},
-						},
+					// cadidate arrived before join, cache it
+					log.Infof("cadidate arrived before join, cache it: %v", candidate)
+					recvCandidates = append(recvCandidates, ResolveOldTrickle{
+						target:    int(payload.Trickle.Target),
+						candidate: candidate,
 					})
-					if err != nil {
-						log.Errorf("grpc send error: %v", err)
-						return status.Errorf(codes.Internal, err.Error())
-					}
 				default:
 					return status.Errorf(codes.Unknown, fmt.Sprintf("negotiate error: %v", err))
 				}
