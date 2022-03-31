@@ -229,6 +229,15 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 				}
 			}
 
+			// trickle the old received candidates
+			for _, oldTrickle := range recvCandidates {
+				log.Debugf("[C=>S] trickle: target %v, old candidate %v", oldTrickle.target, oldTrickle.candidate.Candidate)
+				err = peer.Trickle(oldTrickle.candidate, oldTrickle.target)
+				if err != nil {
+					log.Warnf("peer trickle error: %v", err)
+				}
+			}
+
 			desc := webrtc.SessionDescription{
 				SDP:  payload.Join.Description.Sdp,
 				Type: webrtc.NewSDPType(payload.Join.Description.Type),
@@ -258,15 +267,6 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 			})
 			if err != nil {
 				log.Errorf("signal send error: %v", err)
-			}
-
-			// trickle the old received candidates
-			for _, oldTrickle := range recvCandidates {
-				log.Debugf("[C=>S] trickle: target %v, old candidate %v", oldTrickle.target, oldTrickle.candidate.Candidate)
-				err = peer.Trickle(oldTrickle.candidate, oldTrickle.target)
-				if err != nil {
-					log.Warnf("peer trickle error: %v", err)
-				}
 			}
 
 			publisher := peer.Publisher()
@@ -436,7 +436,7 @@ func (s *SFUService) Signal(sig rtc.RTC_SignalServer) error {
 				switch err {
 				case ion_sfu.ErrNoTransportEstablished:
 					// cadidate arrived before join, cache it
-					log.Infof("cadidate arrived before join, cache it: %v", candidate)
+					log.Infof("cadidate arrived before join, cache it: %v", candidate.Candidate)
 					recvCandidates = append(recvCandidates, ResolveOldTrickle{
 						target:    int(payload.Trickle.Target),
 						candidate: candidate,
